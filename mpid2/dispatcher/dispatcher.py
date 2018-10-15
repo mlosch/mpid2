@@ -28,7 +28,7 @@ def _print_ok(info):
 
 
 def time_stamped(fmt='%Y-%m-%d-%H-%M-%S.%f'):
-    return datetime.datetime.now().strftime(fmt)[:-3]
+	return datetime.datetime.now().strftime(fmt)[:-3]
 
 
 def remote_exec(host, command, logfile=None):
@@ -53,14 +53,14 @@ def remote_exec(host, command, logfile=None):
 	p = subprocess.Popen(['ssh', host, command], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 	output = []
 	with p.stdout:
-	    for line in iter(p.stdout.readline, b''):
-	    	if logfile is not None:
-	    		logfile.write(line)
-	    		logfile.flush()
+		for line in iter(p.stdout.readline, b''):
+			if logfile is not None:
+				logfile.write(line)
+				logfile.flush()
 
-	    		output = line
-	    	else:
-	        	output.append(line.strip())
+				output = line
+			else:
+				output.append(line.strip())
 	p.wait()
 
 	rc = p.returncode
@@ -117,16 +117,29 @@ def find_free_host(hostlist, required_gpus, required_mem):
 		GPU utilizations of the host
 	"""
 
+	conditions_satisfiable = False
+
 	for host in hostlist:
 		gpu_util = query_gpu_utilization(host)
 
 		if len(gpu_util) >= required_gpus:
+			# check for satisfiability
+			req_mem_satisfiable = 0
+			for mem_used, mem_total in gpu_util:
+				if mem_total > required_mem:
+					req_mem_satisfiable += 1
+			if req_mem_satisfiable >= required_gpus:
+				conditions_satisfiable = True
+
 			queued_gpus = []
 			for gpui, gpu in enumerate(gpu_util):
 				if (gpu[1]-gpu[0]) >= required_mem:
 					queued_gpus.append(str(gpui))
 				if len(queued_gpus) == required_gpus:
 					return host, queued_gpus
+
+	if not conditions_satisfiable:
+		raise RuntimeError('Conditions based on %d required gpus with %dMB each is not satisfiable by any machine at any time.' % (required_gpus, required_mem))
 
 	return None, []
 

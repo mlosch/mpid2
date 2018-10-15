@@ -31,7 +31,7 @@ def time_stamped(fmt='%Y-%m-%d-%H-%M-%S.%f'):
     return datetime.datetime.now().strftime(fmt)[:-3]
 
 
-def call(host, command, logfile=None):
+def remote_exec(host, command, logfile=None):
 	"""Calls a command on a remote host via ssh
 
 	Parameters
@@ -83,7 +83,7 @@ def query_gpu_utilization(host):
 	"""
 
 	cmd = 'nvidia-smi --query-gpu="memory.used,memory.total" --format=csv,noheader,nounits'
-	retcode, output = call(host, cmd)
+	retcode, output = remote_exec(host, cmd)
 
 	if retcode != 0:
 		raise RuntimeError('Could not query gpu info via nvidia-smi')
@@ -168,7 +168,7 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 		if available_host is not None:
 			dispatched = True
 
-			command = 'CUDA_VISIBLE_DEVICES=%s %s'%(','.join(gpuids), command)
+			command = 'export CUDA_VISIBLE_DEVICES=%s; %s'%(','.join(gpuids), command)
 
 			key = time_stamped()
 			logfilepath = './%s-%s.out' % (key, available_host)
@@ -176,7 +176,7 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 			logfile.write(command+'\n\n')
 			_print_info('Dispatching command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 			try:
-				retcode, lastoutput = call(available_host, command, logfile)
+				retcode, lastoutput = remote_exec(available_host, command, logfile)
 			except KeyboardInterrupt as e:
 				_print_error('Interrupted command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 				return None, None, None
@@ -240,6 +240,4 @@ def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, rm_failed_l
 	pool.map_async(partial(_async_dispatch, hostlist=hostlist, rm_failed_logs=rm_failed_logs), zip(cmdinds, commands, required_gpus, required_mem)).get(9999999)
 
 	pool.close()
-
-
 

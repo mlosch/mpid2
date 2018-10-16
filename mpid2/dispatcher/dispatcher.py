@@ -181,15 +181,15 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 		if available_host is not None:
 			dispatched = True
 
-			command = 'export CUDA_VISIBLE_DEVICES=%s; %s'%(','.join(gpuids), command)
+			host_command = 'export CUDA_VISIBLE_DEVICES=%s; %s'%(','.join(gpuids), command)
 
 			key = time_stamped()
 			logfilepath = './%s-%s.out' % (key, available_host)
 			logfile = open(logfilepath, 'w')
-			logfile.write(command+'\n\n')
+			logfile.write(host_command+'\n\n')
 			_print_info('Dispatching command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 			try:
-				retcode, lastoutput = remote_exec(available_host, command, logfile)
+				retcode, lastoutput = remote_exec(available_host, host_command, logfile)
 			except KeyboardInterrupt as e:
 				_print_error('Interrupted command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 				return None, None, None
@@ -216,7 +216,7 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 			
 		if not dispatched:
 			time.sleep(1)  # sleep 1 second
-	return available_host, gpuids, command
+	return available_host, gpuids, host_command
 
 
 def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, rm_failed_logs=False):

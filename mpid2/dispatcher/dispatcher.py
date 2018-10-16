@@ -14,6 +14,15 @@ How often does a job tries to rerun a job if it failed
 MAX_RETRIES = 3
 
 
+LOG_TARGETS = dict(
+	none=None,
+	stdout=sys.stdout,
+	stderr=sys.stderr,
+	file=2,
+	file_autorm=3,  # automatically remove the logfile, if the job failed
+)
+
+
 def _print_info(info):
 	print('[I]: '+info)
 
@@ -144,7 +153,7 @@ def find_free_host(hostlist, required_gpus, required_mem):
 	return None, []
 
 
-def _async_dispatch(task, hostlist, rm_failed_logs):
+def _async_dispatch(task, hostlist, log_target):
 	"""Dispatch helper loop. Do not call individually.
 
 	Loops randomly over all hosts and dispatches the given command if a host satisfies the given requirements on memory and number of gpus.
@@ -155,8 +164,8 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 		Tuple of length 4 (int, str, int, int), stating the command id, the command string, the number of required gpus and the amount of required free memory in Megabytes.
 	hostlist : list
 		List of hostnames or addresses
-	rm_failed_logs : bool
-		Set to true, if created command output logs should be deleted automatically if the remote job failed.
+	log_target : str
+		One of the keys in LOG_TARGETS 
 
 	Returns
 	----------
@@ -184,9 +193,13 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 			host_command = 'export CUDA_VISIBLE_DEVICES=%s; %s'%(','.join(gpuids), command)
 
 			key = time_stamped()
-			logfilepath = './%s-%s.out' % (key, available_host)
-			logfile = open(logfilepath, 'w')
-			logfile.write(host_command+'\n\n')
+			if log_target.startswith('file'):
+				logfilepath = './%s-%s.out' % (key, available_host)
+				logfile = open(logfilepath, 'w')
+				logfile.write(host_command+'\n\n')
+			else:
+				logfile = LOG_TARGETS[log_target]
+
 			_print_info('Dispatching command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 			try:
 				retcode, lastoutput = remote_exec(available_host, host_command, logfile)
@@ -194,10 +207,11 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 				_print_error('Interrupted command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 				return None, None, None
 			finally:
-				logfile.close()
+				if logfile is not None and logfile is not sys.stdout and logfile is not sys.stderr:
+					logfile.close()
 
 			if retcode != 0:
-				if rm_failed_logs:
+				if log_target == 'file_autorm':
 					os.remove(logfilepath)
 
 				if tries_left > 0:
@@ -218,8 +232,7 @@ def _async_dispatch(task, hostlist, rm_failed_logs):
 			time.sleep(1)  # sleep 1 second
 	return available_host, gpuids, host_command
 
-
-def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, rm_failed_logs=False):
+def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, log_target='file', rm_failed_logs=False):
 	"""Main dispatcher method.
 
 	Arguments
@@ -232,6 +245,8 @@ def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, rm_failed_l
 		Integer or list of integers defining the minimum number of required gpus on a single host. If list, len(required_gpus) must be equal to len(commands)
 	required_mem : int
 		In Megabytes. Integer or list of integers, defining the minimum amount of free memory required per gpu on a single host.
+	log_target : str
+		One of the keys in LOG_TARGETS 
 	"""
 
 	import multiprocessing as mp
@@ -250,7 +265,10 @@ def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, rm_failed_l
 	pool = mp.Pool(processes=MAX_PARALLEL_JOBS)
 
 	cmdinds = range(len(commands))
-	pool.map_async(partial(_async_dispatch, hostlist=hostlist, rm_failed_logs=rm_failed_logs), zip(cmdinds, commands, required_gpus, required_mem)).get(9999999)
+	pool.map_async(
+		partial(_async_dispatch, hostlist=hostlist, log_target=log_target), 
+		zip(cmdinds, commands, required_gpus, required_mem)
+		).get(9999999)
 
 	pool.close()
 

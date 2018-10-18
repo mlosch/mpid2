@@ -13,6 +13,10 @@ How often does a job tries to rerun a job if it failed
 """
 MAX_RETRIES = 3
 
+"""
+At below what temperature is a gpu considered unused
+"""
+MAX_TEMPERATURE = 35
 
 LOG_TARGETS = dict(
 	none=None,
@@ -91,17 +95,17 @@ def query_gpu_utilization(host):
 		List of integer pairs (memory used, total memory). The length of the list equals the number of gpus on the host
 	"""
 
-	cmd = 'nvidia-smi --query-gpu="memory.used,memory.total" --format=csv,noheader,nounits'
+	cmd = 'nvidia-smi --query-gpu="memory.used,memory.total,temperature.gpu" --format=csv,noheader,nounits'
 	retcode, output = remote_exec(host, cmd)
 
 	if retcode != 0:
-		raise RuntimeError('Could not query gpu info via nvidia-smi')
+		raise RuntimeError('Could not query gpu info via nvidia-smi on %s'%host)
 
 	num_gpus = len(output)
 	mem_util = []
 	for gpu in output:
-		mem_used, mem_total = gpu.split(', ')
-		mem_util.append((int(mem_used), int(mem_total)))
+		mem_used, mem_total, temp = gpu.split(', ')
+		mem_util.append((int(mem_used), int(mem_total), int(temp)))
 
 	return mem_util
 
@@ -134,7 +138,7 @@ def find_free_host(hostlist, required_gpus, required_mem):
 		if len(gpu_util) >= required_gpus:
 			# check for satisfiability
 			req_mem_satisfiable = 0
-			for mem_used, mem_total in gpu_util:
+			for mem_used, mem_total, temp in gpu_util:
 				if mem_total > required_mem:
 					req_mem_satisfiable += 1
 			if req_mem_satisfiable >= required_gpus:
@@ -142,6 +146,8 @@ def find_free_host(hostlist, required_gpus, required_mem):
 
 			queued_gpus = []
 			for gpui, gpu in enumerate(gpu_util):
+				if gpu[2] > MAX_TEMPERATURE:
+					continue
 				if (gpu[1]-gpu[0]) >= required_mem:
 					queued_gpus.append(str(gpui))
 				if len(queued_gpus) == required_gpus:

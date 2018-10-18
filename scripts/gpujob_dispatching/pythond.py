@@ -8,12 +8,13 @@ try:
 except:
 	raise RuntimeError('First two arguments must be of type integer stating: required number of gpus and required amount of memory (in Megabytes)')
 
-if num_gpu > 2:
+if num_gpu > 2 or min_mem > 11000:
 	HOSTS = ['d2volta%02d'%i for i in range(1, 22)]
 elif min_mem < 6000:
 	HOSTS = ['wks-12-%d'%i for i in [31, 32, 33, 44, 45, 56, 47]]
 else:
-	HOSTS = ['menorca', 'samoa', 'sumatra', 'iceland', 'montreal', 'madagaskar', 'fiji', 'takatuka', 'greenland', 'kohtao', 'bermuda', 'jamaica', 'martinique', 'mauritius', 'lanzarote', 'jersey', 'costarica', 'borneo', 'reichenau', 'helgoland', 'helium', 'neon', 'argon']
+	HOSTS = ['d2volta%02d'%i for i in range(1, 22)]
+	# HOSTS = ['menorca', 'sumatra', 'montreal', 'madagaskar', 'fiji', 'takatuka', 'greenland', 'kohtao', 'bermuda', 'jamaica', 'martinique', 'mauritius', 'lanzarote', 'jersey', 'costarica', 'borneo', 'reichenau', 'helgoland', 'helium']
 
 cwd = os.getcwd()
 

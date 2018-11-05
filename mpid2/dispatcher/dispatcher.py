@@ -16,7 +16,7 @@ MAX_RETRIES = 3
 """
 At below what temperature is a gpu considered unused
 """
-MAX_TEMPERATURE = 35
+MAX_TEMPERATURE = 40
 
 LOG_TARGETS = dict(
 	none=None,
@@ -79,6 +79,28 @@ def remote_exec(host, command, logfile=None):
 	rc = p.returncode
 
 	return rc, output
+
+
+def query_gpu_users(host):
+	"""Queries current users of gpus on remote host
+
+	Parameters
+	----------
+	host : str
+		Hostname or address
+
+	Returns
+	----------
+	list
+		List of user names
+	"""
+	cmd = 'nvidia-smi --query-compute-apps=pid --format=csv,noheader | xargs ps -o user'
+	retcode, output = remote_exec(host, cmd)
+
+	if retcode != 0:
+		raise RuntimeError('Could not query gpu info via nvidia-smi on %s'%host)
+
+	return output[1:]
 
 
 def query_gpu_utilization(host):
@@ -200,25 +222,32 @@ def _async_dispatch(task, hostlist, log_target):
 
 			key = time_stamped()
 			if log_target.startswith('file'):
-				logfilepath = './%s-%s.out' % (key, available_host)
+				logfilepath = './%s-[%d]-%s.out' % (key, idx, available_host)
 				logfile = open(logfilepath, 'w')
 				logfile.write(host_command+'\n\n')
 			else:
 				logfile = LOG_TARGETS[log_target]
 
 			_print_info('Dispatching command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
+			t_start = time.time()
 			try:
 				retcode, lastoutput = remote_exec(available_host, host_command, logfile)
 			except KeyboardInterrupt as e:
 				_print_error('Interrupted command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 				return None, None, None
 			finally:
+				t_end = time.time()
 				if logfile is not None and logfile is not sys.stdout and logfile is not sys.stderr:
 					logfile.close()
 
 			if retcode != 0:
-				if log_target == 'file_autorm':
+
+				if log_target == 'file_autorm' and (t_end - t_start) < 10.:
 					os.remove(logfilepath)
+				if log_target.startswith('file'):
+					if os.path.isfile(logfilepath):
+						os.rename(logfilepath, logfilepath[:-4]+'_failed.out')
+
 
 				if tries_left > 0:
 					_print_warning('Error while executing command [%d] on host %s on gpus %s. Trying again ...' % (idx, available_host, ','.join(gpuids)))
@@ -235,6 +264,7 @@ def _async_dispatch(task, hostlist, log_target):
 				_print_ok('Finished command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 			
 		if not dispatched:
+			print('Command [%d] pending...' % idx)
 			time.sleep(1)  # sleep 1 second
 	return available_host, gpuids, host_command
 

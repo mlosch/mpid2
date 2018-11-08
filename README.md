@@ -7,6 +7,13 @@ Utilities for the D2 CVMC group at the Max Planck Institute for Informatics
 
 `python setup.py install` or `python setup.py develop`
 
+### General note on dispatching on remote hosts
+
+The underlying python scripts make use of a series of ssh calls. To circumvent repeated entering of the ssh password start an ssh agent:
+
+`exec ssh-agent bash`
+`ssh-add`
+
 ### Use pythond
 
 - bash scripts/gpujob_dispatching/install_pythond.sh

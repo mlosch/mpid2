@@ -2,7 +2,10 @@ import subprocess
 import time
 import sys
 import datetime
-import Queue
+try: 
+    import queue as queue
+except ImportError:
+    import Queue as queue
 from functools import partial
 from random import shuffle, seed
 import multiprocessing as mp
@@ -193,7 +196,7 @@ def __interrupt_safe_put(q, obj, timeout=0.1):
 	while True:
 		try:
 			q.put(obj, timeout=timeout)
-		except Queue.Full:
+		except queue.Full:
 			continue
 		return
 
@@ -201,7 +204,7 @@ def __interrupt_safe_get(q, timeout=0.1):
 	while True:
 		try:
 			obj = q.get(timeout=timeout)
-		except Queue.Empty:
+		except queue.Empty:
 			continue
 		return obj
 
@@ -353,7 +356,7 @@ def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_me
 			if satisfied:
 				try:
 					queue_ready.put({'t': timestamp, 'hostname': host, 'gpuids': queued_gpus}, timeout=0.1)
-				except Queue.Full as e:
+				except queue.Full as e:
 					# put back in pending queue, if queue_ready is full (that should not happen)
 					print('Unexpected Exception caught: %s' % str(e))
 					queue_pending.put((host, 0), timeout=0.1)

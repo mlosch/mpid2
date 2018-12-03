@@ -1,1 +1,1 @@
-import dispatcher
+from . import dispatcher

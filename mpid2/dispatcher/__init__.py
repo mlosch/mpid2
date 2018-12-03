@@ -1,1 +1,1 @@
-from dispatcher import dispatch, find_free_host, query_gpu_utilization, remote_exec, LOG_TARGETS
+from .dispatcher import dispatch, find_free_host, query_gpu_utilization, remote_exec, LOG_TARGETS

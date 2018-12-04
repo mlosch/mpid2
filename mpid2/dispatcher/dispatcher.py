@@ -236,7 +236,6 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 	"""
 
 	seed(datetime.datetime.now())
-	#shuffle(hostlist)  # shuffle to reduce risk of querying the same machines multiple times
 
 	idx, command = task
 	dispatched = False
@@ -244,7 +243,6 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 	tries_left = MAX_RETRIES
 
 	while not dispatched:
-		#available_host, gpuids = find_free_host(hostlist, required_gpus, required_mem)
 		access_info = None
 		while access_info is None:
 			access_info = __interrupt_safe_get(queue_ready)
@@ -273,8 +271,6 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 				 # disable this host for 10 seconds to allow enough time to reserve memory
 				__interrupt_safe_put(queue_pending, (available_host, t_start + RESERVE_TIME_FOR_JOB_STARTUP))
 				retcode, lastoutput = remote_exec(available_host, host_command, logfile)
-				# retcode = 0
-				# lastoutput = 'success'
 			except KeyboardInterrupt as e:
 				_print_error('Interrupted command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 				return None, None, None
@@ -295,7 +291,6 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 				if tries_left > 0:
 					_print_warning('Error while executing command [%d] on host %s on gpus %s. Trying again ...' % (idx, available_host, ','.join(gpuids)))
 					_print_warning('Last output line:\n%s' % lastoutput)
-					shuffle(hostlist)
 					dispatched = False
 					tries_left -= 1
 				else:

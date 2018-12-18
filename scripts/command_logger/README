@@ -2,11 +2,10 @@ What does it do:
 Logs all python calls with arguments, time stamp and on which machine it was called plus a short message in a logfile
 
 How to install:
-- copy autologcmd.py and pythony to your ~/bin folder. Create it if does not exist.
-- set LOGFILE in ~/bin/autologcmd.py to a filepath of your choosing. The script only appends, never deletes.
-- chmod +x ~/bin/pythony
-- source ~/.bashrc to update paths
-- if you still cannot call 'pythony', add ~/bin to your PATH variable
+- simply call the script install_pythony.sh from the root directory of this project:
+
+`bash scripts/command_logger/install_pythony.sh`
+- call pythony from anywhere. See below for instructions
 
 How to use:
 Instead of calling your scripts via python, call pythony and add an extra argument starting with % to add a message

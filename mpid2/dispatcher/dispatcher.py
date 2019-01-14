@@ -26,7 +26,7 @@ MAX_TEMPERATURE = 40
 """
 How much time in seconds does a host gets reserved by a job on startup, before allowing other jobs to take the same host
 """
-RESERVE_TIME_FOR_JOB_STARTUP = 10
+RESERVE_TIME_FOR_JOB_STARTUP = 60
 
 
 LOG_TARGETS = dict(
@@ -79,8 +79,11 @@ def remote_exec(host, command, logfile=None):
 	with p.stdout:
 		for line in iter(p.stdout.readline, b''):
 			if logfile is not None:
-				logfile.write(line)
-				logfile.flush()
+				try:
+					logfile.write(line)
+					logfile.flush()
+				except IOError as e:
+					print(e)
 
 				output = line
 			else:
@@ -249,6 +252,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 			# if the information is greater than 5 seconds old, put back in pending queue
 			if (time.time() - access_info['t']) > 5.0:
 				__interrupt_safe_put(queue_pending, (access_info['hostname'], 0))
+				access_info = None
 
 		available_host, gpuids = access_info['hostname'], access_info['gpuids']
 
@@ -260,6 +264,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 			key = time_stamped()
 			if log_target.startswith('file'):
 				logfilepath = './%s-[%d]-%s.out' % (key, idx, available_host)
+				print('Log file at: %s'%logfilepath)
 				logfile = open(logfilepath, 'w')
 				logfile.write(host_command+'\n\n')
 			else:
@@ -303,7 +308,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 			
 		if not dispatched:
 			print('Command [%d] pending...' % idx)
-			time.sleep(1)  # sleep 1 second
+			# time.sleep(1)  # sleep 1 second
 	return available_host, gpuids, host_command
 
 
@@ -353,7 +358,7 @@ def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_me
 					queue_ready.put({'t': timestamp, 'hostname': host, 'gpuids': queued_gpus}, timeout=0.1)
 				except queue.Full as e:
 					# put back in pending queue, if queue_ready is full (that should not happen)
-					print('Unexpected Exception caught: %s' % str(e))
+					print('Unexpected Exception caught: queue.Full')
 					queue_pending.put((host, 0), timeout=0.1)
 			else:
 				# put back and check later in 5 seconds

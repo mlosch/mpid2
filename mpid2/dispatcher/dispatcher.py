@@ -1,3 +1,5 @@
+from __future__ import unicode_literals
+
 import subprocess
 import time
 import sys
@@ -38,9 +40,9 @@ LOG_TARGETS = dict(
 )
 
 UNIT_TO_GB = {
-	'kB': 1e-6,
-	'MB': 1e-3,
-	'GB': 1
+	b'kB': 1e-6,
+	b'MB': 1e-3,
+	b'GB': 1
 }
 
 
@@ -86,7 +88,10 @@ def remote_exec(host, command, logfile=None):
 		for line in iter(p.stdout.readline, b''):
 			if logfile is not None:
 				try:
-					logfile.write(line)
+					if sys.version_info[0] >= 3:
+						logfile.write(str(line, 'utf-8'))
+					else:
+						logfile.write(line)
 					logfile.flush()
 				except IOError as e:
 					print(e)
@@ -148,8 +153,8 @@ def query_gpu_utilization(host):
 	mem_util = []
 	for gpu in output:
 		mem_used, mem_total, temp = gpu.split(b', ')
-		mem_used = int(mem_used)*UNIT_TO_GB['MB']
-		mem_total = int(mem_total)*UNIT_TO_GB['MB']
+		mem_used = int(mem_used)*UNIT_TO_GB[b'MB']
+		mem_total = int(mem_total)*UNIT_TO_GB[b'MB']
 		mem_util.append((mem_used, mem_total, int(temp)))
 
 	return mem_util

@@ -21,7 +21,7 @@ MAX_RETRIES = 3
 """
 At below what temperature is a gpu considered unused
 """
-MAX_TEMPERATURE = 40
+MAX_TEMPERATURE = 55
 
 """
 How much time in seconds does a host gets reserved by a job on startup, before allowing other jobs to take the same host
@@ -36,6 +36,12 @@ LOG_TARGETS = dict(
 	file=2,
 	file_autorm=3,  # automatically remove the logfile, if the job failed
 )
+
+UNIT_TO_GB = {
+	'kB': 1e-6,
+	'MB': 1e-3,
+	'GB': 1
+}
 
 
 def _print_info(info):
@@ -128,7 +134,8 @@ def query_gpu_utilization(host):
 	Returns
 	----------
 	list
-		List of integer pairs (memory used, total memory). The length of the list equals the number of gpus on the host
+		List of float pair and integer (memory used in GB, total memory in GB, temperature in degree C). 
+		The length of the list equals the number of gpus on the host
 	"""
 
 	cmd = 'nvidia-smi --query-gpu="memory.used,memory.total,temperature.gpu" --format=csv,noheader,nounits'
@@ -140,13 +147,102 @@ def query_gpu_utilization(host):
 	num_gpus = len(output)
 	mem_util = []
 	for gpu in output:
-		mem_used, mem_total, temp = gpu.split(', ')
-		mem_util.append((int(mem_used), int(mem_total), int(temp)))
+		mem_used, mem_total, temp = gpu.split(b', ')
+		mem_used = int(mem_used)*UNIT_TO_GB['MB']
+		mem_total = int(mem_total)*UNIT_TO_GB['MB']
+		mem_util.append((mem_used, mem_total, int(temp)))
 
 	return mem_util
 
 
-def find_free_host(hostlist, required_gpus, required_mem):
+def query_cpu_utilization(host):
+	"""Queries cpu utilization and available memory on remote host
+	
+	Parameters
+	----------
+	host : str
+		Hostname or address
+
+	Returns
+	----------
+	float
+		cpu utilization (fraction), 
+	float
+		available memory in GB
+	float
+		total memory in GB
+	"""
+
+	cmd = "echo \"$(mpstat | grep all)  $(cat /proc/meminfo | grep -E 'MemTotal|MemAvailable')\""
+	retcode, output = remote_exec(host, cmd)
+
+	if retcode != 0:
+		raise RuntimeError('Could not query cpu and memory utilization on %s'%host)
+
+	cpu_util = []
+	entries = output[0].split()
+	cpu = float(entries[3])
+
+	totalmem = int(entries[14])
+	unit = entries[15]
+	totalmem = totalmem*UNIT_TO_GB[unit]
+
+	entries = output[1].split()
+	mem = int(entries[1])
+	unit = entries[2]
+	mem = mem*UNIT_TO_GB[unit]
+
+	return cpu/100., mem, totalmem
+
+
+def host_satisfies_conditions(host,
+	required_gpus, required_gpu_mem,
+	required_cpu_mem):
+	"""Queries the host whether the given hardware requirements are satisfied and satisfiable
+	"""
+	satisfies = False
+	satisfiable = False
+	queued_gpus = []
+
+	if required_gpus > 0:
+		try:
+			gpu_util = query_gpu_utilization(host)
+
+			if len(gpu_util) >= required_gpus:
+				# check for satisfiability
+				req_mem_satisfiable = 0
+				for mem_used, mem_total, temp in gpu_util:
+					if mem_total > required_gpu_mem:
+						req_mem_satisfiable += 1
+				if req_mem_satisfiable >= required_gpus:
+					satisfiable = True
+
+				for gpui, gpu in enumerate(gpu_util):
+					if gpu[2] > MAX_TEMPERATURE:
+						continue
+					if (gpu[1]-gpu[0]) >= required_gpu_mem:
+						queued_gpus.append(str(gpui))
+					if len(queued_gpus) == required_gpus:
+						satisfies = True
+						break
+		except RuntimeError:
+			satisfiable = False
+
+	if required_cpu_mem > 0:
+		try:
+			cpu_util, cpu_mem, cpu_total_mem = query_cpu_utilization(host)
+			satisfies = required_cpu_mem < cpu_mem
+			satisfiable = cpu_total_mem >= required_cpu_mem
+		except RuntimeError:
+			satisfiable = False
+
+	return satisfies, satisfiable, queued_gpus
+
+
+def find_free_host(hostlist, 
+	required_gpus, required_gpu_mem,
+	required_cpu_mem,
+	):
 	"""Returns the first host, that matches the required number of gpus and memory
 
 	Parameters
@@ -155,8 +251,10 @@ def find_free_host(hostlist, required_gpus, required_mem):
 		List of hostnames or addresses
 	required_gpus : int
 		Number of required gpus
-	required_mem : int
-		Amount of free memory required per gpu in Megabyte
+	required_gpu_mem : int
+		Amount of free memory required per gpu in GB
+	required_cpu_mem : int
+		Amount of free cpu memory required in GB
 
 	Returns
 	----------
@@ -166,31 +264,19 @@ def find_free_host(hostlist, required_gpus, required_mem):
 		GPU utilizations of the host
 	"""
 
-	conditions_satisfiable = False
+	any_satisfies = False
 
 	for host in hostlist:
-		gpu_util = query_gpu_utilization(host)
+		satisfies, satisfiable, gpu_list = host_satisfies_conditions(host, required_gpus, required_gpu_mem, required_cpu_mem)
 
-		if len(gpu_util) >= required_gpus:
-			# check for satisfiability
-			req_mem_satisfiable = 0
-			for mem_used, mem_total, temp in gpu_util:
-				if mem_total > required_mem:
-					req_mem_satisfiable += 1
-			if req_mem_satisfiable >= required_gpus:
-				conditions_satisfiable = True
+		if satisfies:
+			return host, gpu_list
 
-			queued_gpus = []
-			for gpui, gpu in enumerate(gpu_util):
-				if gpu[2] > MAX_TEMPERATURE:
-					continue
-				if (gpu[1]-gpu[0]) >= required_mem:
-					queued_gpus.append(str(gpui))
-				if len(queued_gpus) == required_gpus:
-					return host, queued_gpus
+		if satisfiable:
+			any_satisfies = True
 
-	if not conditions_satisfiable:
-		raise RuntimeError('Conditions based on %d required gpus with %dMB each is not satisfiable by any machine at any time.' % (required_gpus, required_mem))
+	if not any_satisfies:
+		raise RuntimeError('Conditions based on %d required gpus with %dMB each is not satisfiable by any machine at any time.' % (required_gpus, required_gpu_mem))
 
 	return None, []
 
@@ -203,11 +289,18 @@ def __interrupt_safe_put(q, obj, timeout=0.1):
 			continue
 		return
 
-def __interrupt_safe_get(q, timeout=0.1):
+def __interrupt_safe_get(q, timeout=0.1, verbose=False):
+	t0 = time.time()
+	t1 = t0
+	dt = 5.
 	while True:
 		try:
 			obj = q.get(timeout=timeout)
 		except queue.Empty:
+			if verbose and (time.time()-t1) > dt:
+				_print_info('Waiting for free host. Elapsed time %.1fs ...'%(time.time()-t0))
+				t1 = time.time()
+				dt = 10.
 			continue
 		return obj
 
@@ -248,7 +341,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 	while not dispatched:
 		access_info = None
 		while access_info is None:
-			access_info = __interrupt_safe_get(queue_ready)
+			access_info = __interrupt_safe_get(queue_ready, verbose=True)
 			# if the information is greater than 5 seconds old, put back in pending queue
 			if (time.time() - access_info['t']) > 5.0:
 				__interrupt_safe_put(queue_pending, (access_info['hostname'], 0))
@@ -312,11 +405,11 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 	return available_host, gpuids, host_command
 
 
-def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_mem):
-	conditions_satisfiable = False
+def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_gpu_mem, required_cpu_mem):
+	# conditions_satisfiable = False
 
 	# if not conditions_satisfiable:
-	# 	raise RuntimeError('Conditions based on %d required gpus with %dMB each is not satisfiable by any machine at any time.' % (required_gpus, required_mem))
+	# 	raise RuntimeError('Conditions based on %d required gpus with %dMB each is not satisfiable by any machine at any time.' % (required_gpus, required_gpu_mem))
 
 	while True:
 		host, twait = __interrupt_safe_get(queue_pending)
@@ -331,29 +424,11 @@ def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_me
 			continue
 
 		timestamp = time.time()
-		gpu_util = query_gpu_utilization(host)
 
-		if len(gpu_util) >= required_gpus:
-			# check for satisfiability
-			req_mem_satisfiable = 0
-			for mem_used, mem_total, temp in gpu_util:
-				if mem_total > required_mem:
-					req_mem_satisfiable += 1
-			if req_mem_satisfiable >= required_gpus:
-				conditions_satisfiable = True
+		satisfies, satisfiable, queued_gpus = host_satisfies_conditions(host, required_gpus, required_gpu_mem, required_cpu_mem)
 
-			queued_gpus = []
-			satisfied = False
-			for gpui, gpu in enumerate(gpu_util):
-				if gpu[2] > MAX_TEMPERATURE:
-					continue
-				if (gpu[1]-gpu[0]) >= required_mem:
-					queued_gpus.append(str(gpui))
-				if len(queued_gpus) == required_gpus:
-					satisfied = True
-					break
-
-			if satisfied:
+		if satisfiable:
+			if satisfies:
 				try:
 					queue_ready.put({'t': timestamp, 'hostname': host, 'gpuids': queued_gpus}, timeout=0.1)
 				except queue.Full as e:
@@ -366,12 +441,9 @@ def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_me
 		else:
 			# otherwise, leave the host out of our list entirely. It will never satisfy our requirements
 			print('never satisfies: %s'%host)
-			pass
 
 
-
-
-def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, log_target='file', rm_failed_logs=False):
+def dispatch(hostlist, commands, required_gpus=1, required_gpu_mem=8, required_cpu_mem=0, log_target='file', rm_failed_logs=False):
 	"""Main dispatcher method.
 
 	Arguments
@@ -382,21 +454,25 @@ def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, log_target=
 		List of command strings, as would be written in shell. Ensure the correct working directory by prepending a `cd ~/workdir/...;` if necessary.
 	required_gpus : int
 		Integer or list of integers defining the minimum number of required gpus on a single host. If list, len(required_gpus) must be equal to len(commands)
-	required_mem : int
-		In Megabytes. Integer or list of integers, defining the minimum amount of free memory required per gpu on a single host.
+	required_gpu_mem : int
+		In GB. Integer or list of integers, defining the minimum amount of free memory required per gpu on a single host.
+	required_cpu_mem : int
+		In GB. Integer or list of integers, defining the mimimum amount of available cpu memory on a single host.
 	log_target : str
 		One of the keys in LOG_TARGETS 
 	"""
 
 	if type(required_gpus) is list and len(required_gpus) != len(commands):
 		raise RuntimeError('Entries in required_gpus list must be equal to entries in commands.')
-	if type(required_mem) is list and len(required_mem) != len(commands):
-		raise RuntimeError('Entries in required_mem list must be equal to entries in commands.')
+	if type(required_gpu_mem) is list and len(required_gpu_mem) != len(commands):
+		raise RuntimeError('Entries in required_gpu_mem list must be equal to entries in commands.')
+	if type(required_cpu_mem) is list and len(required_cpu_mem) != len(commands):
+		raise RuntimeError('Entries in required_cpu_mem list must be equal to entries in commands.')
 
 	# if type(required_gpus) is int:
 	# 	required_gpus = [required_gpus]*len(commands)
-	# if type(required_mem) is int:
-	# 	required_mem = [required_mem]*len(commands)
+	# if type(required_gpu_mem) is int:
+	# 	required_gpu_mem = [required_gpu_mem]*len(commands)
 
 	
 	pool = mp.Pool(processes=MAX_PARALLEL_JOBS)
@@ -405,11 +481,12 @@ def dispatch(hostlist, commands, required_gpus=1, required_mem=8000, log_target=
 	# fill queue
 	queue_pending = m.Queue(len(hostlist)+1)
 	queue_ready = m.Queue(len(hostlist)+1)
+	shuffle(hostlist)
 	for host in hostlist:
 		queue_pending.put((host, 0))
 
 	# start enqueuer
-	enqueuer = mp.Process(target=_utilization_enqueuer, args=(queue_ready, queue_pending, required_gpus, required_mem))
+	enqueuer = mp.Process(target=_utilization_enqueuer, args=(queue_ready, queue_pending, required_gpus, required_gpu_mem, required_cpu_mem))
 	enqueuer.start()
 
 	cmdinds = range(len(commands))

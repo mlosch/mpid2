@@ -19,8 +19,11 @@ The underlying python scripts make use of a series of ssh calls. To circumvent r
 - bash scripts/gpujob_dispatching/install_pythond.sh
 - If `~/bin` is in `$PATH`, then pythond can be called anywhere
 - To run a command on a free gpu/machine:
-  `pythond num_gpus min_mem command.py --args`
-  e.g. `pythond 1 8000 train.py`
+  `pythond num_gpus gpu_mem cpu_mem command.py --args`
+  e.g. `pythond 1 8 0 train.py`, where memory is to be stated in GB.
+- Set the number of required cpu memory to 0, if unknown
+- To run a command on a free cpu machine set the number of required gpus to 0,
+  e.g. `pythond 0 0 256`, to execute on cpu machines with at least 256GB of available RAM.
 
 ### Use parallel job dispatching
 
@@ -36,5 +39,5 @@ commands = [
   
  hosts = ['host1', 'host2', 'host3', 'host4']
  
- dispatcher.dispatch(hosts, commands, required_gpus=2, required_mem=8000, log_target='file')
+ dispatcher.dispatch(hosts, commands, required_gpus=2, required_gpu_mem=8, required_cpu_mem=0, log_target='file')
 ```

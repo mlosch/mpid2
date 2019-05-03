@@ -5,12 +5,13 @@ import time
 import sys
 import datetime
 try: 
-    import queue as queue
+	import queue as queue
 except ImportError:
-    import Queue as queue
+	import Queue as queue
 from functools import partial
 from random import shuffle, seed
 import multiprocessing as mp
+import threading
 import os
 
 MAX_PARALLEL_JOBS = 4
@@ -62,8 +63,57 @@ def _print_ok(info):
 def time_stamped(fmt='%Y-%m-%d-%H-%M-%S.%f'):
 	return datetime.datetime.now().strftime(fmt)[:-3]
 
+class TimeoutError(Exception):
+	pass
 
-def remote_exec(host, command, logfile=None):
+class RemoteError(Exception):
+	pass
+
+
+class TimeoutCommand(object):
+	def __init__(self, cmd, logfile=None):
+		self.cmd = cmd
+		self.logfile = logfile
+		self.process = None
+		self.output = []
+		self.retcode = None
+
+	def call(self, timeout=None):
+		def run():
+			self.process = subprocess.Popen(self.cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+			p = self.process
+			with p.stdout:
+				for line in iter(p.stdout.readline, b''):
+					if self.logfile is not None:
+						try:
+							if sys.version_info[0] >= 3:
+								self.logfile.write(str(line, 'utf-8'))
+							else:
+								self.logfile.write(line)
+							self.logfile.flush()
+						except IOError as e:
+							print(e)
+
+						self.output = line
+					else:
+						self.output.append(line.strip())
+			p.wait()
+
+			self.retcode = p.returncode
+
+		thread = threading.Thread(target=run)
+		thread.start()
+		thread.join(timeout)
+		if thread.is_alive():
+			# timeout happened
+			self.process.terminate()
+			thread.join()
+			raise TimeoutError()
+
+		return self.retcode, self.output
+
+
+def remote_exec(host, command, timeout=None, logfile=None):
 	"""Calls a command on a remote host via ssh
 
 	Parameters
@@ -72,6 +122,8 @@ def remote_exec(host, command, logfile=None):
 		Hostname or address
 	command : str
 		Command to execute on host
+	timeout : int
+		Optional timeout for maximal running time in seconds. Set to None if not desired
 	logfile : filehandle
 		If set, all outputs from remotely executed command will be written to this file handle
 
@@ -82,26 +134,28 @@ def remote_exec(host, command, logfile=None):
 	list
 		List of command output strings
 	"""
-	p = subprocess.Popen(['ssh', host, command], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-	output = []
-	with p.stdout:
-		for line in iter(p.stdout.readline, b''):
-			if logfile is not None:
-				try:
-					if sys.version_info[0] >= 3:
-						logfile.write(str(line, 'utf-8'))
-					else:
-						logfile.write(line)
-					logfile.flush()
-				except IOError as e:
-					print(e)
+	# p = subprocess.Popen(['ssh', host, command], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+	# output = []
+	# with p.stdout:
+	# 	for line in iter(p.stdout.readline, b''):
+	# 		if logfile is not None:
+	# 			try:
+	# 				if sys.version_info[0] >= 3:
+	# 					logfile.write(str(line, 'utf-8'))
+	# 				else:
+	# 					logfile.write(line)
+	# 				logfile.flush()
+	# 			except IOError as e:
+	# 				print(e)
 
-				output = line
-			else:
-				output.append(line.strip())
-	p.wait()
+	# 			output = line
+	# 		else:
+	# 			output.append(line.strip())
+	# p.wait()
 
-	rc = p.returncode
+	# rc = p.returncode
+
+	rc, output = TimeoutCommand(['ssh', host, command]).call(timeout)
 
 	return rc, output
 
@@ -123,7 +177,7 @@ def query_gpu_users(host):
 	retcode, output = remote_exec(host, cmd)
 
 	if retcode != 0:
-		raise RuntimeError('Could not query gpu info via nvidia-smi on %s'%host)
+		raise RemoteError('Could not query gpu info via nvidia-smi on %s'%host)
 
 	return output[1:]
 
@@ -144,10 +198,10 @@ def query_gpu_utilization(host):
 	"""
 
 	cmd = 'nvidia-smi --query-gpu="memory.used,memory.total,temperature.gpu" --format=csv,noheader,nounits'
-	retcode, output = remote_exec(host, cmd)
+	retcode, output = remote_exec(host, cmd, timeout=3)
 
 	if retcode != 0:
-		raise RuntimeError('Could not query gpu info via nvidia-smi on %s'%host)
+		raise RemoteError('Could not query gpu info via nvidia-smi on %s'%host)
 
 	num_gpus = len(output)
 	mem_util = []
@@ -179,10 +233,10 @@ def query_cpu_utilization(host):
 	"""
 
 	cmd = "echo \"$(mpstat | grep all)  $(cat /proc/meminfo | grep -E 'MemTotal|MemAvailable')\""
-	retcode, output = remote_exec(host, cmd)
+	retcode, output = remote_exec(host, cmd, timeout=3)
 
 	if retcode != 0:
-		raise RuntimeError('Could not query cpu and memory utilization on %s'%host)
+		raise RemoteError('Could not query cpu and memory utilization on %s'%host)
 
 	cpu_util = []
 	entries = output[0].split()
@@ -305,8 +359,11 @@ def __interrupt_safe_get(q, timeout=0.1, verbose=False):
 			if verbose and (time.time()-t1) > dt:
 				_print_info('Waiting for free host. Elapsed time %.1fs ...'%(time.time()-t0))
 				t1 = time.time()
-				dt = 10.
+				dt = 60.
 			continue
+		except:
+			print('#################################')
+
 		return obj
 
 
@@ -347,6 +404,9 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 		access_info = None
 		while access_info is None:
 			access_info = __interrupt_safe_get(queue_ready, verbose=True)
+			if type(access_info) is str and access_info == 'SHUTDOWN':
+				break
+
 			# if the information is greater than 5 seconds old, put back in pending queue
 			if (time.time() - access_info['t']) > 5.0:
 				__interrupt_safe_put(queue_pending, (access_info['hostname'], 0))
@@ -410,7 +470,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 	return available_host, gpuids, host_command
 
 
-def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_gpu_mem, required_cpu_mem):
+def _utilization_enqueuer(numhosts, queue_ready, queue_pending, required_gpus, required_gpu_mem, required_cpu_mem):
 	# conditions_satisfiable = False
 
 	# if not conditions_satisfiable:
@@ -430,7 +490,15 @@ def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_gp
 
 		timestamp = time.time()
 
-		satisfies, satisfiable, queued_gpus = host_satisfies_conditions(host, required_gpus, required_gpu_mem, required_cpu_mem)
+		try:
+			# print('[%s] Querying ...'%host)
+			satisfies, satisfiable, queued_gpus = host_satisfies_conditions(host, required_gpus, required_gpu_mem, required_cpu_mem)
+		except TimeoutError:
+			print('[%s] Timeout'%host)
+			satisfiable = False
+		except RemoteError:
+			print('[%s] Remote execution error'%host)
+			satisfiable = False
 
 		if satisfiable:
 			if satisfies:
@@ -445,10 +513,17 @@ def _utilization_enqueuer(queue_ready, queue_pending, required_gpus, required_gp
 				__interrupt_safe_put(queue_pending, (host, time.time() + 5))
 		else:
 			# otherwise, leave the host out of our list entirely. It will never satisfy our requirements
-			print('never satisfies: %s'%host)
+			# print('never satisfies: %s'%host)
+			numhosts -= 1
+			if numhosts == 0:
+				# Notify all dispatcher processes to shutdown
+				for k in range(MAX_PARALLEL_JOBS):
+					__interrupt_safe_put(queue_ready, 'SHUTDOWN')
+				raise RuntimeError('Conditions are not satisfiable by any machine at any time.')
+			pass
 
 
-def dispatch(hostlist, commands, required_gpus=1, required_gpu_mem=8, required_cpu_mem=0, log_target='file', rm_failed_logs=False):
+def dispatch(hostlist, commands, required_gpus=1, required_gpu_mem=8, required_cpu_mem=0, log_target='file'):
 	"""Main dispatcher method.
 
 	Arguments
@@ -489,9 +564,10 @@ def dispatch(hostlist, commands, required_gpus=1, required_gpu_mem=8, required_c
 	shuffle(hostlist)
 	for host in hostlist:
 		queue_pending.put((host, 0))
+	numhosts = len(hostlist)
 
 	# start enqueuer
-	enqueuer = mp.Process(target=_utilization_enqueuer, args=(queue_ready, queue_pending, required_gpus, required_gpu_mem, required_cpu_mem))
+	enqueuer = mp.Process(target=_utilization_enqueuer, args=(numhosts, queue_ready, queue_pending, required_gpus, required_gpu_mem, required_cpu_mem))
 	enqueuer.start()
 
 	cmdinds = range(len(commands))

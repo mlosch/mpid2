@@ -361,8 +361,10 @@ def __interrupt_safe_get(q, timeout=0.1, verbose=False):
 				t1 = time.time()
 				dt = 60.
 			continue
-		except:
+		except Exception as e:
 			print('#################################')
+			print(e)
+			raise e
 
 		return obj
 
@@ -433,7 +435,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 			try:
 				 # disable this host for 10 seconds to allow enough time to reserve memory
 				__interrupt_safe_put(queue_pending, (available_host, t_start + RESERVE_TIME_FOR_JOB_STARTUP))
-				retcode, lastoutput = remote_exec(available_host, host_command, logfile)
+				retcode, lastoutput = remote_exec(available_host, host_command, logfile=logfile)
 			except KeyboardInterrupt as e:
 				_print_error('Interrupted command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
 				return None, None, None

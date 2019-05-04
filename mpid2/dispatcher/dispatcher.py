@@ -14,7 +14,7 @@ import multiprocessing as mp
 import threading
 import os
 
-MAX_PARALLEL_JOBS = 4
+MAX_PARALLEL_JOBS = 10
 
 """
 How often does a job tries to rerun a job if it failed
@@ -30,6 +30,12 @@ MAX_TEMPERATURE = 55
 How much time in seconds does a host gets reserved by a job on startup, before allowing other jobs to take the same host
 """
 RESERVE_TIME_FOR_JOB_STARTUP = 60
+
+
+"""
+How long do we wait for the suitability check on the host before kicking out the host of the list
+"""
+HOST_SUITABILITY_TIMEOUT = 5
 
 
 LOG_TARGETS = dict(
@@ -134,29 +140,8 @@ def remote_exec(host, command, timeout=None, logfile=None):
 	list
 		List of command output strings
 	"""
-	# p = subprocess.Popen(['ssh', host, command], shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-	# output = []
-	# with p.stdout:
-	# 	for line in iter(p.stdout.readline, b''):
-	# 		if logfile is not None:
-	# 			try:
-	# 				if sys.version_info[0] >= 3:
-	# 					logfile.write(str(line, 'utf-8'))
-	# 				else:
-	# 					logfile.write(line)
-	# 				logfile.flush()
-	# 			except IOError as e:
-	# 				print(e)
-
-	# 			output = line
-	# 		else:
-	# 			output.append(line.strip())
-	# p.wait()
-
-	# rc = p.returncode
 
 	rc, output = TimeoutCommand(['ssh', host, command]).call(timeout)
-
 	return rc, output
 
 
@@ -198,7 +183,7 @@ def query_gpu_utilization(host):
 	"""
 
 	cmd = 'nvidia-smi --query-gpu="memory.used,memory.total,temperature.gpu" --format=csv,noheader,nounits'
-	retcode, output = remote_exec(host, cmd, timeout=3)
+	retcode, output = remote_exec(host, cmd, timeout=HOST_SUITABILITY_TIMEOUT)
 
 	if retcode != 0:
 		raise RemoteError('Could not query gpu info via nvidia-smi on %s'%host)
@@ -233,7 +218,7 @@ def query_cpu_utilization(host):
 	"""
 
 	cmd = "echo \"$(mpstat | grep all)  $(cat /proc/meminfo | grep -E 'MemTotal|MemAvailable')\""
-	retcode, output = remote_exec(host, cmd, timeout=3)
+	retcode, output = remote_exec(host, cmd, timeout=HOST_SUITABILITY_TIMEOUT)
 
 	if retcode != 0:
 		raise RemoteError('Could not query cpu and memory utilization on %s'%host)

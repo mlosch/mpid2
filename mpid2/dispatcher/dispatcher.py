@@ -35,7 +35,7 @@ RESERVE_TIME_FOR_JOB_STARTUP = 60
 """
 How long do we wait for the suitability check on the host before kicking out the host of the list
 """
-HOST_SUITABILITY_TIMEOUT = 5
+HOST_SUITABILITY_TIMEOUT = 10
 
 
 LOG_TARGETS = dict(
@@ -82,7 +82,7 @@ class TimeoutCommand(object):
 		self.logfile = logfile
 		self.process = None
 		self.output = []
-		self.retcode = None
+		self.retcode = -1
 
 	def call(self, timeout=None):
 		def run():
@@ -112,8 +112,11 @@ class TimeoutCommand(object):
 		thread.join(timeout)
 		if thread.is_alive():
 			# timeout happened
-			self.process.terminate()
-			thread.join()
+			try:
+				self.process.terminate()
+				thread.join()
+			except AttributeError:
+				pass
 			raise TimeoutError()
 
 		return self.retcode, self.output
@@ -141,7 +144,7 @@ def remote_exec(host, command, timeout=None, logfile=None):
 		List of command output strings
 	"""
 
-	rc, output = TimeoutCommand(['ssh', host, command]).call(timeout)
+	rc, output = TimeoutCommand(['ssh', host, command], logfile).call(timeout)
 	return rc, output
 
 
@@ -349,7 +352,6 @@ def __interrupt_safe_get(q, timeout=0.1, verbose=False):
 		except Exception as e:
 			print('#################################')
 			print(e)
-			raise e
 
 		return obj
 
@@ -450,6 +452,7 @@ def _async_dispatch(task, queue_pending, queue_ready, log_target):
 					_print_error('-------------------------------------')
 			else:
 				_print_ok('Finished command [%d] on host %s on gpus: %s' % (idx, available_host, ','.join(gpuids)))
+				_print_ok('Last output line:\n%s' % lastoutput)
 			
 		if not dispatched:
 			print('Command [%d] pending...' % idx)
@@ -481,13 +484,15 @@ def _utilization_enqueuer(numhosts, queue_ready, queue_pending, required_gpus, r
 			# print('[%s] Querying ...'%host)
 			satisfies, satisfiable, queued_gpus = host_satisfies_conditions(host, required_gpus, required_gpu_mem, required_cpu_mem)
 		except TimeoutError:
-			print('[%s] Timeout'%host)
-			satisfiable = False
+			# print('[%s] Timeout'%host)
+			satisfiable = None
+			satisfies = False
 		except RemoteError:
-			print('[%s] Remote execution error'%host)
-			satisfiable = False
+			# print('[%s] Remote execution error'%host)
+			satisfiable = None
+			satisfies = False
 
-		if satisfiable:
+		if satisfiable is None or satisfiable == True:
 			if satisfies:
 				try:
 					queue_ready.put({'t': timestamp, 'hostname': host, 'gpuids': queued_gpus}, timeout=0.1)

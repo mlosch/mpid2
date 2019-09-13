@@ -11,7 +11,7 @@ except:
 
 if num_gpu > 2 or min_gpu_mem > 11:
 	ignore = set()
-	HOSTS = ['d2volta%02d'%i for i in range(1, 22) if i not in ignore]
+	HOSTS = ['d2volta%02d'%i for i in range(1, 23) if i not in ignore]
 	HOSTS += ['d2pascal01', 'd2pascal02', 'd2pascal03', 'd2pascal04']
 elif num_gpu > 0 and min_gpu_mem < 6:
 	HOSTS = ['wks-12-%d'%i for i in [31, 32, 33, 44, 45, 56, 47]]

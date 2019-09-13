@@ -13,18 +13,19 @@ from random import shuffle, seed
 import multiprocessing as mp
 import threading
 import os
+import re
 
-MAX_PARALLEL_JOBS = 10
+MAX_PARALLEL_JOBS = 4
 
 """
 How often does a job tries to rerun a job if it failed
 """
-MAX_RETRIES = 3
+MAX_RETRIES = 2
 
 """
 At below what temperature is a gpu considered unused
 """
-MAX_TEMPERATURE = 55
+MAX_TEMPERATURE = 70
 
 """
 How much time in seconds does a host gets reserved by a job on startup, before allowing other jobs to take the same host
@@ -89,7 +90,8 @@ class TimeoutCommand(object):
 			self.process = subprocess.Popen(self.cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
 			p = self.process
 			with p.stdout:
-				for line in iter(p.stdout.readline, b''):
+				#for line in iter(p.stdout.readline, b''):
+				for line in iter(p.stdout.readline, ''):
 					if self.logfile is not None:
 						try:
 							if sys.version_info[0] >= 3:
@@ -191,10 +193,20 @@ def query_gpu_utilization(host):
 	if retcode != 0:
 		raise RemoteError('Could not query gpu info via nvidia-smi on %s'%host)
 
+	# remove potential entries, that do not adhere to the format \d+, \d+, \d+
+	pattern = re.compile('\d+, \d+, \d+')
+	i = 0
+	while i < len(output):
+		if pattern.match(output[i]) is None:
+			output.pop(i)
+		else:
+			i += 1
+
 	num_gpus = len(output)
 	mem_util = []
 	for gpu in output:
 		mem_used, mem_total, temp = gpu.split(b', ')
+
 		mem_used = int(mem_used)*UNIT_TO_GB[b'MB']
 		mem_total = int(mem_total)*UNIT_TO_GB[b'MB']
 		mem_util.append((mem_used, mem_total, int(temp)))
